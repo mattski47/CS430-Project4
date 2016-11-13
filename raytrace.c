@@ -13,8 +13,9 @@
 
 #define SPHERE 0
 #define PLANE 1
-#define MAXCOLOR 255
+#define MAX_COLOR 255
 #define PI acos(-1.0)
+#define MAX_RECURSION_DEPTH 7
 
 // struct for camera data
 typedef struct {
@@ -29,6 +30,9 @@ typedef struct {
     double position[3];
     double diffuse_color[3];
     double specular_color[3];
+    double reflect;
+    double refract;
+    double ior;
     union {
         struct {
             double radius;
@@ -100,8 +104,8 @@ static inline double v3_dot(v3 a, v3 b) {
 }
 
 void read_scene(FILE*);
-void raycast(FILE*, int, int);
-void illuminate(double*, double*, double, Object*, int);
+void raycast(FILE*);
+double* illuminate(double*, double*, double, Object*, double*, int);
 int compare_objects(Object*, Object*);
 double diffuse(double, double, double);
 double specular(double, double, double, double);
@@ -120,10 +124,12 @@ char* next_string(FILE*);
 double next_number(FILE*);
 double* next_vector(FILE*);
 double clamp(double, double, double);
-void output_p6(FILE*, int, int);
+void output_p6(FILE*);
 
 // initialize input file line counter
 int line = 1;
+int w;
+int h;
 
 // create arrays for storing objects and pixels
 Object** objects;
@@ -141,15 +147,15 @@ int main(int argc, char** argv) {
     }
     
     // check that 'width' is a non-zero number
-    int N = atoi(argv[1]);
-    if (N == 0) {
+    w = atoi(argv[1]);
+    if (w == 0) {
         fprintf(stderr, "Error: Argument 1, 'width' must be a non-zero integer.\n");
         exit(1);
     }
     
     // check that 'height' is a non-zero number
-    int M = atoi(argv[2]);
-    if (M == 0) {
+    h = atoi(argv[2]);
+    if (h == 0) {
         fprintf(stderr, "Error: Argument 2, 'height' must be a non-zero integer.\n");
         exit(1);
     }
@@ -167,7 +173,7 @@ int main(int argc, char** argv) {
     
     read_scene(json);
     
-    raycast(json, N, M);
+    raycast(json);
     
     // open and check output file location
     FILE* output = fopen(argv[4], "w");
@@ -177,7 +183,7 @@ int main(int argc, char** argv) {
     }
     
     // write pixel data to output file then close it
-    output_p6(output, N, M);
+    output_p6(output);
     fclose(output);
     
     for (int i=0; objects[i] != NULL; i++)
@@ -284,7 +290,7 @@ void read_scene(FILE* json) {
 }
 
 // raycast objects found after reading json file
-void raycast(FILE* json, int w, int h) {
+void raycast(FILE* json) {
     double cx = camera.position[0];
     double cy = camera.position[1];
     double cz = camera.position[2];
@@ -334,7 +340,14 @@ void raycast(FILE* json, int w, int h) {
             }
                 
             if (best_t > 0 && best_t != INFINITY) {
-                illuminate(Rd, Ro, best_t, closest_object, pixmap_index);
+                int depth = 1;
+                double color[3] = {0, 0, 0};
+                double* final_color = illuminate(Rd, Ro, best_t, closest_object, color, depth);
+                
+                // save pixel to pixmap buffer
+                pixmap[pixmap_index].r = (unsigned char) (clamp(final_color[0], 0, 1)*MAX_COLOR);
+                pixmap[pixmap_index].g = (unsigned char) (clamp(final_color[1], 0, 1)*MAX_COLOR);
+                pixmap[pixmap_index].b = (unsigned char) (clamp(final_color[2], 0, 1)*MAX_COLOR);
             } else {
                 pixmap[pixmap_index].r = 0;
                 pixmap[pixmap_index].g = 0;
@@ -347,12 +360,15 @@ void raycast(FILE* json, int w, int h) {
 }
 
 // adds lighting to the pixel found above at best_t from the object closest to the camera
-void illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object, int pixmap_index) {
-    // default color to black
-    double color[3];
-    color[0] = 0;
-    color[1] = 0;
-    color[2] = 0;
+double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object, double* color, int depth) {
+    if (depth == MAX_RECURSION_DEPTH) {
+        return color;
+    }
+    
+    double* current_color = malloc(sizeof(double)*3);
+    current_color[0] = color[0];
+    current_color[1] = color[1];
+    current_color[2] = color[2];
 
     double pixel_position[3];
     double obj_to_cam[3];
@@ -376,6 +392,8 @@ void illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object
 
     // look through light to find the ones that influence this pixel
     Light* current_light;
+    Object* current_object;
+    double new_t = 0;
     for (int j=0; lights[j] != NULL; j++) {
         current_light = lights[j];
 
@@ -396,7 +414,6 @@ void illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object
 
         // boolean that tells if object is in a shadow
         int in_shadow = 0;
-        Object* current_object;
         for (int k=0; objects[k] != NULL; k++) {
             current_object = objects[k];
             // skip checking for intersection with the object already being looked at
@@ -405,7 +422,6 @@ void illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object
 
             // find new intersection between light and each object looking for one that is closer to the light 
             // and casts a shadow on the closest object to the camera at this pixel
-            double new_t = 0;
             switch (current_object->kind) {
                 case SPHERE:
                     new_t = sphere_intersect(pixel_position, obj_to_light, current_object->position, current_object->sphere.radius);
@@ -421,7 +437,7 @@ void illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object
             // if there is a closer object to the light, then there is a shadow
             if (new_t > 0 && new_t <= dl) {
                 in_shadow = 1;
-                break;
+                return current_color;
             }
         }
 
@@ -458,15 +474,14 @@ void illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object
             double ang = fang(ld, light_to_obj, current_light->angular_a0, current_light->theta);
 
             // modify color if pixel to reflect changes from illumination
-            color[0] += rad * ang * (diffuse_color[0] + specular_color[0]);
-            color[1] += rad * ang * (diffuse_color[1] + specular_color[1]);
-            color[2] += rad * ang * (diffuse_color[2] + specular_color[2]);
+            current_color[0] += rad * ang * (diffuse_color[0] + specular_color[0]);
+            current_color[1] += rad * ang * (diffuse_color[1] + specular_color[1]);
+            current_color[2] += rad * ang * (diffuse_color[2] + specular_color[2]);
+            
+            return illuminate(light_to_obj, pixel_position, new_t, current_object, current_color, depth+1);
         }
     }
-    // save pixel to pixmap buffer
-    pixmap[pixmap_index].r = (unsigned char) (clamp(color[0], 0, 1)*MAXCOLOR);
-    pixmap[pixmap_index].g = (unsigned char) (clamp(color[1], 0, 1)*MAXCOLOR);
-    pixmap[pixmap_index].b = (unsigned char) (clamp(color[2], 0, 1)*MAXCOLOR);
+    
 }
 
 // compares two objects based on field values because c cant compare objects directly
@@ -600,6 +615,12 @@ void parse_sphere(FILE* json, Object* object) {
             if (strcmp(key, "radius") == 0) {
                 object->sphere.radius = next_number(json);
                 hasradius = 1;
+            } else if (strcmp(key, "reflectivity") == 0) {
+                object->reflect = clamp(next_number(json), 0, 1);
+            } else if (strcmp(key, "refractivity") == 0) {
+                object->refract = clamp(next_number(json), 0, 1);
+            } else if (strcmp(key, "ior") == 0) {
+                object->ior = next_number(json);
             } else if (strcmp(key, "diffuse_color") == 0) {
                 double* value = next_vector(json);
                 object->diffuse_color[0] = value[0];
@@ -681,7 +702,6 @@ void parse_plane(FILE* json, Object* object) {
                 object->diffuse_color[2] = value[2];
                 hascolor = 1;
             } else if (strcmp(key, "specular_color") == 0) {
-                double* value = next_vector(json);
                 object->specular_color[0] = value[0];
                 object->specular_color[1] = value[1];
                 object->specular_color[2] = value[2];
@@ -971,9 +991,9 @@ double clamp(double number, double min, double max) {
 }
 
 // outputs data in buffer to output file
-void output_p6(FILE* outputfp, int width, int height) {
+void output_p6(FILE* outputfp) {
     // create header
-    fprintf(outputfp, "P6\n%d %d\n%d\n", height, width, MAXCOLOR);
+    fprintf(outputfp, "P6\n%d %d\n%d\n", h, w, MAX_COLOR);
     // writes buffer to output Pixel by Pixel
-    fwrite(pixmap, sizeof(Pixel), height*width, outputfp);
+    fwrite(pixmap, sizeof(Pixel), h*w, outputfp);
 }
