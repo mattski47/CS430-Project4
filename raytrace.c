@@ -105,7 +105,8 @@ static inline double v3_dot(v3 a, v3 b) {
 
 void read_scene(FILE*);
 void raycast(FILE*);
-double* illuminate(double*, double*, double, Object*, double*, int);
+double* illuminate(double*, double*, double, Object*);
+double* shade(Object*, double, double*, double*, int);
 int compare_objects(Object*, Object*);
 double diffuse(double, double, double);
 double specular(double, double, double, double);
@@ -340,9 +341,9 @@ void raycast(FILE* json) {
             }
                 
             if (best_t > 0 && best_t != INFINITY) {
-                int depth = 1;
+                int level = 0;
                 double color[3] = {0, 0, 0};
-                double* final_color = illuminate(Rd, Ro, best_t, closest_object, color, depth);
+                double* final_color = shade(closest_object, best_t, Rd, Ro, level);
                 
                 // save pixel to pixmap buffer
                 pixmap[pixmap_index].r = (unsigned char) (clamp(final_color[0], 0, 1)*MAX_COLOR);
@@ -360,15 +361,11 @@ void raycast(FILE* json) {
 }
 
 // adds lighting to the pixel found above at best_t from the object closest to the camera
-double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object, double* color, int depth) {
-    if (depth == MAX_RECURSION_DEPTH) {
-        return color;
-    }
-    
+double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object) {
     double* current_color = malloc(sizeof(double)*3);
-    current_color[0] = color[0];
-    current_color[1] = color[1];
-    current_color[2] = color[2];
+    current_color[0] = 0;
+    current_color[1] = 0;
+    current_color[2] = 0;
 
     double pixel_position[3];
     double obj_to_cam[3];
@@ -437,7 +434,7 @@ double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_obj
             // if there is a closer object to the light, then there is a shadow
             if (new_t > 0 && new_t <= dl) {
                 in_shadow = 1;
-                return current_color;
+                break;
             }
         }
 
@@ -477,11 +474,77 @@ double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_obj
             current_color[0] += rad * ang * (diffuse_color[0] + specular_color[0]);
             current_color[1] += rad * ang * (diffuse_color[1] + specular_color[1]);
             current_color[2] += rad * ang * (diffuse_color[2] + specular_color[2]);
-            
-            return illuminate(light_to_obj, pixel_position, new_t, current_object, current_color, depth+1);
         }
     }
     
+    return current_color;
+}
+
+double* shade(Object* current_object, double current_t, double* Rd, double* Ro, int level) {
+    double* color = malloc(sizeof(double)*3);
+    color[0] = 0;
+    color[1] = 0;
+    color[2] = 0;
+    
+    if (level == MAX_RECURSION_DEPTH) {
+        return color;
+    }
+    
+    v3_add(color, illuminate(Rd, Ro, current_t, current_object), color);
+    
+    double N[3];
+    if (current_object->kind == SPHERE) {
+        v3_subtract(Ro, current_object->position, N);
+    } else {
+        N[0] = current_object->plane.normal[0];
+        N[1] = current_object->plane.normal[1];
+        N[2] = current_object->plane.normal[2];
+    }
+    normalize(N);
+
+    if (current_object->reflect > 0) {
+        double reflect_vector[3];
+        v3_scale(N, 2*v3_dot(N, Rd), reflect_vector);
+        v3_subtract(Rd, reflect_vector, reflect_vector);
+        normalize(reflect_vector);
+
+        double best_t = INFINITY;
+        Object* closest_object;
+        // look for intersection of an object 
+        for (int i=0; objects[i] != NULL; i++) {
+            double t = 0;
+            switch (objects[i]->kind) {
+                case SPHERE:
+                    t = sphere_intersect(Ro, reflect_vector, objects[i]->position, objects[i]->sphere.radius);
+                    break;
+                case PLANE:
+                    t = plane_intersect(Ro, reflect_vector, objects[i]->position, objects[i]->plane.normal);
+                    break;
+                default:
+                    fprintf(stderr, "Error: Unknown object.\n");
+                    exit(1);
+            }
+
+            // save object if it intersects closer to the camera
+            if (t > 0 && t < best_t) {
+                best_t = t;
+                closest_object = objects[i];
+            }
+        }
+
+        if (best_t > 0 && best_t != INFINITY) {
+            double* Ron = malloc(sizeof(double)*3);
+            v3_scale(reflect_vector, best_t, Ron);
+            v3_add(Ro, Ron, Ron);
+
+            double* reflected_color = malloc(sizeof(double)*3);
+            v3_scale(shade(closest_object, best_t, reflect_vector, Ron, level), current_object->reflect, reflected_color);
+            
+            v3_add(color, reflected_color, color);
+        }
+    }
+    
+    return color;
 }
 
 // compares two objects based on field values because c cant compare objects directly
