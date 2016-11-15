@@ -105,8 +105,8 @@ static inline double v3_dot(v3 a, v3 b) {
 
 void read_scene(FILE*);
 void raycast(FILE*);
-double* illuminate(double*, double*, double, Object*);
-double* shade(Object*, double, double*, double*, int);
+double* illuminate(double*, double*, Object*);
+double* shade(Object*, double*, double*, int);
 int compare_objects(Object*, Object*);
 double diffuse(double, double, double);
 double specular(double, double, double, double);
@@ -341,14 +341,16 @@ void raycast(FILE* json) {
             }
                 
             if (best_t > 0 && best_t != INFINITY) {
-                int level = 0;
-                double color[3] = {0, 0, 0};
-                double* final_color = shade(closest_object, best_t, Rd, Ro, level);
+                double Ron[3];
+                v3_scale(Rd, best_t, Ron);
+                v3_add(Ron, Ro, Ron);
+                
+                double* color = shade(closest_object, Rd, Ron, 0);
                 
                 // save pixel to pixmap buffer
-                pixmap[pixmap_index].r = (unsigned char) (clamp(final_color[0], 0, 1)*MAX_COLOR);
-                pixmap[pixmap_index].g = (unsigned char) (clamp(final_color[1], 0, 1)*MAX_COLOR);
-                pixmap[pixmap_index].b = (unsigned char) (clamp(final_color[2], 0, 1)*MAX_COLOR);
+                pixmap[pixmap_index].r = (unsigned char) (clamp(color[0], 0, 1)*MAX_COLOR);
+                pixmap[pixmap_index].g = (unsigned char) (clamp(color[1], 0, 1)*MAX_COLOR);
+                pixmap[pixmap_index].b = (unsigned char) (clamp(color[2], 0, 1)*MAX_COLOR);
             } else {
                 pixmap[pixmap_index].r = 0;
                 pixmap[pixmap_index].g = 0;
@@ -361,18 +363,20 @@ void raycast(FILE* json) {
 }
 
 // adds lighting to the pixel found above at best_t from the object closest to the camera
-double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_object) {
+double* illuminate(double* Rd, double* Ro, Object* closest_object) {
     double* current_color = malloc(sizeof(double)*3);
     current_color[0] = 0;
     current_color[1] = 0;
     current_color[2] = 0;
 
     double pixel_position[3];
+    pixel_position[0] = Ro[0];
+    pixel_position[1] = Ro[1];
+    pixel_position[2] = Ro[2];
+    
     double obj_to_cam[3];
 
     // find position of pixel in space and get vector from it to the camera
-    v3_scale(Rd, closest_t, pixel_position);
-    v3_add(pixel_position, Ro, pixel_position);
     v3_subtract(camera.position, pixel_position, obj_to_cam);
     normalize(obj_to_cam);
 
@@ -396,9 +400,7 @@ double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_obj
 
         // find vector from light to the object
         double light_to_obj[3];
-        v3_scale(Rd, closest_t, light_to_obj);
-        v3_add(light_to_obj, Ro, light_to_obj);
-        v3_subtract(light_to_obj, current_light->position, light_to_obj);
+        v3_subtract(pixel_position, current_light->position, light_to_obj);
         normalize(light_to_obj);
 
         // find vector from the object to the light
@@ -417,14 +419,17 @@ double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_obj
             if (compare_objects(current_object, closest_object))
                 continue;
 
+            double* offset = malloc(sizeof(double)*3);
+            v3_scale(obj_to_light, 0.00001, offset);
+            v3_add(offset, pixel_position, offset);
             // find new intersection between light and each object looking for one that is closer to the light 
             // and casts a shadow on the closest object to the camera at this pixel
             switch (current_object->kind) {
                 case SPHERE:
-                    new_t = sphere_intersect(pixel_position, obj_to_light, current_object->position, current_object->sphere.radius);
+                    new_t = sphere_intersect(offset, obj_to_light, current_object->position, current_object->sphere.radius);
                     break;
                 case PLANE:
-                    new_t = plane_intersect(pixel_position, obj_to_light, current_object->position, current_object->plane.normal);
+                    new_t = plane_intersect(offset, obj_to_light, current_object->position, current_object->plane.normal);
                     break;
                 default:
                     fprintf(stderr, "Error: Unknown object.\n");
@@ -480,7 +485,7 @@ double* illuminate(double* Rd, double* Ro, double closest_t, Object* closest_obj
     return current_color;
 }
 
-double* shade(Object* current_object, double current_t, double* Rd, double* Ro, int level) {
+double* shade(Object* current_object, double* Rd, double* Ro, int level) {
     double* color = malloc(sizeof(double)*3);
     color[0] = 0;
     color[1] = 0;
@@ -490,7 +495,7 @@ double* shade(Object* current_object, double current_t, double* Rd, double* Ro, 
         return color;
     }
     
-    v3_add(color, illuminate(Rd, Ro, current_t, current_object), color);
+    v3_add(color, illuminate(Rd, Ro, current_object), color);
     
     double N[3];
     if (current_object->kind == SPHERE) {
@@ -512,13 +517,21 @@ double* shade(Object* current_object, double current_t, double* Rd, double* Ro, 
         Object* closest_object;
         // look for intersection of an object 
         for (int i=0; objects[i] != NULL; i++) {
+            // skip checking for intersection with the object already being looked at
+            if (compare_objects(current_object, objects[i]))
+                continue;
+
+            double* offset = malloc(sizeof(double)*3);
+            v3_scale(reflect_vector, 0.00001, offset);
+            v3_add(offset, Ro, offset);
+            
             double t = 0;
             switch (objects[i]->kind) {
                 case SPHERE:
-                    t = sphere_intersect(Ro, reflect_vector, objects[i]->position, objects[i]->sphere.radius);
+                    t = sphere_intersect(offset, reflect_vector, objects[i]->position, objects[i]->sphere.radius);
                     break;
                 case PLANE:
-                    t = plane_intersect(Ro, reflect_vector, objects[i]->position, objects[i]->plane.normal);
+                    t = plane_intersect(offset, reflect_vector, objects[i]->position, objects[i]->plane.normal);
                     break;
                 default:
                     fprintf(stderr, "Error: Unknown object.\n");
@@ -538,7 +551,7 @@ double* shade(Object* current_object, double current_t, double* Rd, double* Ro, 
             v3_add(Ro, Ron, Ron);
 
             double* reflected_color = malloc(sizeof(double)*3);
-            v3_scale(shade(closest_object, best_t, reflect_vector, Ron, level), current_object->reflect, reflected_color);
+            v3_scale(shade(closest_object, reflect_vector, Ron, level+1), current_object->reflect, reflected_color);
             
             v3_add(color, reflected_color, color);
         }
@@ -658,6 +671,9 @@ void parse_sphere(FILE* json, Object* object) {
     
     // set object kind to sphere
     object->kind = SPHERE;
+    object->reflect = 0;
+    object->refract = 0;
+    object->ior = 1;
     
     skip_ws(json);
     
@@ -736,6 +752,9 @@ void parse_plane(FILE* json, Object* object) {
     
     // set object kind to plane
     object->kind = PLANE;
+    object->reflect = 0;
+    object->refract = 0;
+    object->ior = 1;
     
     skip_ws(json);
     
@@ -753,26 +772,35 @@ void parse_plane(FILE* json, Object* object) {
             skip_ws(json);
             
             // set values for this plane depending on what key was read and sets its 'boolean' to reflect the found field
-            double* value = next_vector(json);
             if (strcmp(key, "normal") == 0) {
+                double* value = next_vector(json);
                 object->plane.normal[0] = value[0];
                 object->plane.normal[1] = value[1];
                 object->plane.normal[2] = value[2];
                 hasnormal = 1;
             } else if (strcmp(key, "diffuse_color") == 0) {
+                double* value = next_vector(json);
                 object->diffuse_color[0] = value[0];
                 object->diffuse_color[1] = value[1];
                 object->diffuse_color[2] = value[2];
                 hascolor = 1;
             } else if (strcmp(key, "specular_color") == 0) {
+                double* value = next_vector(json);
                 object->specular_color[0] = value[0];
                 object->specular_color[1] = value[1];
                 object->specular_color[2] = value[2];
             } else if (strcmp(key, "position") == 0) {
+                double* value = next_vector(json);
                 object->position[0] = value[0];
                 object->position[1] = value[1];
                 object->position[2] = value[2];
-                hasposition = 1;
+                hasposition = 1;}
+            else if (strcmp(key, "reflectivity") == 0) {
+                object->reflect = clamp(next_number(json), 0, 1);
+            } else if (strcmp(key, "refractivity") == 0) {
+                object->refract = clamp(next_number(json), 0, 1);
+            } else if (strcmp(key, "ior") == 0) {
+                object->ior = next_number(json);
             } else {
                 fprintf(stderr, "Error: Unknown property '%s' for 'sphere'. (Line %d)\n", key, line);
                 exit(1);
