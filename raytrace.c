@@ -340,6 +340,7 @@ void raycast(FILE* json) {
                 v3_scale(Rd, best_t, Ron);
                 v3_add(Ron, Ro, Ron);
                 
+                // call shade with the ior for air
                 double* color = shade(closest_object, Rd, Ron, 0, 1.0);
                 
                 // save pixel to pixmap buffer
@@ -399,9 +400,11 @@ double* illuminate(double* pixel_position, Object* closest_object) {
             if (compare_objects(current_object, closest_object))
                 continue;
 
+            // offset slightly to avoid spots
             double* offset = malloc(sizeof(double)*3);
             v3_scale(obj_to_light, 0.00001, offset);
             v3_add(offset, pixel_position, offset);
+            
             // find new intersection between light and each object looking for one that is closer to the light 
             // and casts a shadow on the closest object to the camera at this pixel
             double new_t = shoot(obj_to_light, offset, current_object);
@@ -455,6 +458,7 @@ double* illuminate(double* pixel_position, Object* closest_object) {
     return current_color;
 }
 
+// recursive shade function
 double* shade(Object* current_object, double* Rd, double* Ro, int level, double ior) {
     double* color = malloc(sizeof(double)*3);
     color[0] = 0;
@@ -466,6 +470,7 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
     
     double* N = get_normal(current_object, Ro);
 
+    // calculate reflective color if reflectivity is > 0
     if (current_object->reflectivity > 0) {
         double reflected_ray[3];
         v3_scale(N, 2*v3_dot(N, Rd), reflected_ray);
@@ -480,6 +485,7 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
             if (compare_objects(current_object, objects[i]))
                 continue;
 
+            // offset slightly to avoid spots
             double* offset = malloc(sizeof(double)*3);
             v3_scale(reflected_ray, 0.00001, offset);
             v3_add(offset, Ro, offset);
@@ -506,9 +512,11 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
         }
     }
     
+    // calculate refractive color if refractivity is > 0
     if (current_object->refractivity > 0) {
         double* refracted_ray = refraction(ior, current_object->ior, Rd, N);
         
+        // offset slightly to avoid spots
         double* offset = malloc(sizeof(double)*3);
         v3_scale(refracted_ray, 0.00001, offset);
         v3_add(offset, Ro, offset);
@@ -568,6 +576,7 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
     return color;
 }
 
+// shade object directly
 double* direct_shade(Object* current_object, double* pixel_position, double* light_color, double* light_direction, double* light_position) {
     double* color = malloc(sizeof(double)*3);
     color[0] = 0;
@@ -607,7 +616,7 @@ double* direct_shade(Object* current_object, double* pixel_position, double* lig
     specular_color[1] = specular(light_color[1], current_object->specular_color[1], diffuse_component, specular_component);
     specular_color[2] = specular(light_color[2], current_object->specular_color[2], diffuse_component, specular_component);
 
-    // modify color if pixel to reflect changes from illumination
+    // add diffuse and specular color
     color[0] += (diffuse_color[0] + specular_color[0]);
     color[1] += (diffuse_color[1] + specular_color[1]);
     color[2] += (diffuse_color[2] + specular_color[2]);
@@ -615,6 +624,7 @@ double* direct_shade(Object* current_object, double* pixel_position, double* lig
     return color;
 }
 
+// send out rays to see if they intersect with the object
 double shoot(double* Rd, double* Ro, Object* object) {
     double t = 0;
     switch (object->kind) {
@@ -631,6 +641,7 @@ double shoot(double* Rd, double* Ro, Object* object) {
     return t;
 }
 
+// get object normal
 double* get_normal(Object* object, double* pixel_position) {
     double* N = malloc(sizeof(double)*3);
     
@@ -642,6 +653,7 @@ double* get_normal(Object* object, double* pixel_position) {
     return N;
 }
 
+// refraction function
 double* refraction(double outer_ior, double inner_ior, double* ray_in, double* N) {
     double* ray_out = malloc(sizeof(double)*3);
     
