@@ -107,6 +107,7 @@ void read_scene(FILE*);
 void raycast(FILE*);
 double* illuminate(double*, double*, Object*);
 double* shade(Object*, double*, double*, int, double);
+double* direct_shade(Object*, double*, double*, double*, double*);
 double* refraction(double, double, double*, double*);
 int compare_objects(Object*, Object*);
 double diffuse(double, double, double);
@@ -375,21 +376,17 @@ double* illuminate(double* Rd, double* Ro, Object* closest_object) {
     pixel_position[1] = Ro[1];
     pixel_position[2] = Ro[2];
     
-    double obj_to_cam[3];
-
     // find position of pixel in space and get vector from it to the camera
+    double obj_to_cam[3];
     v3_subtract(camera.position, pixel_position, obj_to_cam);
     normalize(obj_to_cam);
 
     // find and save object normal
-    double N[3];
-    if (closest_object->kind == SPHERE) {
+    double* N = malloc(sizeof(double)*3);
+    if (closest_object->kind == SPHERE)
         v3_subtract(pixel_position, closest_object->position, N);
-    } else {
-        N[0] = closest_object->plane.normal[0];
-        N[1] = closest_object->plane.normal[1];
-        N[2] = closest_object->plane.normal[2];
-    }
+    else
+        N = closest_object->plane.normal;
     normalize(N);
 
     // look through light to find the ones that influence this pixel
@@ -498,14 +495,11 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
     
     v3_add(color, illuminate(Rd, Ro, current_object), color);
     
-    double N[3];
-    if (current_object->kind == SPHERE) {
+    double* N = malloc(sizeof(double)*3);
+    if (current_object->kind == SPHERE)
         v3_subtract(Ro, current_object->position, N);
-    } else {
-        N[0] = current_object->plane.normal[0];
-        N[1] = current_object->plane.normal[1];
-        N[2] = current_object->plane.normal[2];
-    }
+    else
+        N = current_object->plane.normal;
     normalize(N);
 
     if (current_object->reflectivity > 0) {
@@ -554,6 +548,7 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
             double* reflected_color = malloc(sizeof(double)*3);
             v3_scale(shade(closest_object, reflected_ray, Ron, level+1, current_object->ior), current_object->reflectivity, reflected_color);
             
+            v3_add(color, direct_shade(closest_object, Ron, reflected_color, reflected_ray, Ron), color);
             v3_add(color, reflected_color, color);
         }
     }
@@ -630,12 +625,65 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
             v3_scale(next_ray, best_t, Ron);
             v3_add(Ro, Ron, Ron);
 
-            double* reflected_color = malloc(sizeof(double)*3);
-            v3_scale(shade(closest_object, next_ray, Ron, level+1, current_object->ior), current_object->reflectivity, reflected_color);
+            double* refracted_color = malloc(sizeof(double)*3);
+            v3_scale(shade(closest_object, next_ray, Ron, level+1, current_object->ior), current_object->reflectivity, refracted_color);
             
-            v3_add(color, reflected_color, color);
+            v3_add(color, direct_shade(closest_object, Ron, refracted_color, next_ray, back), color);
+            v3_add(color, refracted_color, color);
         }
     }
+    
+    return color;
+}
+
+double* direct_shade(Object* current_object, double* pixel_position, double* light_color, double* light_direction, double* light_position) {
+    double* color = malloc(sizeof(double)*3);
+    color[0] = 0;
+    color[1] = 0;
+    color[2] = 0;
+    
+    double* N = malloc(sizeof(double)*3);
+    if (current_object->kind == SPHERE)
+        v3_subtract(pixel_position, current_object->position, N);
+    else
+        N = current_object->plane.normal;
+    normalize(N);
+    
+    // find vector from the object to the light
+    double obj_to_light[3];
+    v3_subtract(light_position, pixel_position, obj_to_light);
+    normalize(obj_to_light);
+    
+    double obj_to_cam[3];
+    v3_subtract(camera.position, pixel_position, obj_to_cam);
+    normalize(obj_to_cam);
+    
+    double R[3];
+    v3_scale(N, 2*v3_dot(N, light_direction), R);
+    v3_subtract(light_direction, R, R);
+    normalize(R);
+    
+    // calculate (N*L)
+    double diffuse_component = v3_dot(N, obj_to_light);
+    // calculate (R*V)
+    double specular_component = v3_dot(R, obj_to_cam);
+    
+    // find diffuse color
+    double diffuse_color[3];
+    diffuse_color[0] = diffuse(light_color[0], current_object->diffuse_color[0], diffuse_component);
+    diffuse_color[1] = diffuse(light_color[1], current_object->diffuse_color[1], diffuse_component);
+    diffuse_color[2] = diffuse(light_color[2], current_object->diffuse_color[2], diffuse_component);
+
+    // find specular color
+    double specular_color[3];
+    specular_color[0] = specular(light_color[0], current_object->specular_color[0], diffuse_component, specular_component);
+    specular_color[1] = specular(light_color[1], current_object->specular_color[1], diffuse_component, specular_component);
+    specular_color[2] = specular(light_color[2], current_object->specular_color[2], diffuse_component, specular_component);
+
+    // modify color if pixel to reflect changes from illumination
+    color[0] += (diffuse_color[0] + specular_color[0]);
+    color[1] += (diffuse_color[1] + specular_color[1]);
+    color[2] += (diffuse_color[2] + specular_color[2]);
     
     return color;
 }
