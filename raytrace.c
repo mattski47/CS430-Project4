@@ -105,9 +105,10 @@ static inline double v3_dot(v3 a, v3 b) {
 
 void read_scene(FILE*);
 void raycast(FILE*);
-double* illuminate(double*, double*, Object*);
+double* illuminate(double*, Object*);
 double* shade(Object*, double*, double*, int, double);
 double* direct_shade(Object*, double*, double*, double*, double*);
+double shoot(double*, double*, Object*);
 double* refraction(double, double, double*, double*);
 int compare_objects(Object*, Object*);
 double diffuse(double, double, double);
@@ -196,6 +197,8 @@ int main(int argc, char** argv) {
     for (int i=0; lights[i] != NULL; i++)
         free(lights[i]);
     free(lights);
+    
+    free(pixmap);
     
     return (EXIT_SUCCESS);
 }
@@ -322,18 +325,7 @@ void raycast(FILE* json) {
             Object* closest_object;
             // look for intersection of an object 
             for (int i=0; objects[i] != NULL; i++) {
-                double t = 0;
-                switch (objects[i]->kind) {
-                    case SPHERE:
-                        t = sphere_intersect(Ro, Rd, objects[i]->position, objects[i]->sphere.radius);
-                        break;
-                    case PLANE:
-                        t = plane_intersect(Ro, Rd, objects[i]->position, objects[i]->plane.normal);
-                        break;
-                    default:
-                        fprintf(stderr, "Error: Unknown object.\n");
-                        exit(1);
-                }
+                double t = shoot(Rd, Ro, objects[i]);
                 
                 // save object if it intersects closer to the camera
                 if (t > 0 && t < best_t) {
@@ -365,16 +357,11 @@ void raycast(FILE* json) {
 }
 
 // adds lighting to the pixel found above at best_t from the object closest to the camera
-double* illuminate(double* Rd, double* Ro, Object* closest_object) {
+double* illuminate(double* pixel_position, Object* closest_object) {
     double* current_color = malloc(sizeof(double)*3);
     current_color[0] = 0;
     current_color[1] = 0;
     current_color[2] = 0;
-
-    double pixel_position[3];
-    pixel_position[0] = Ro[0];
-    pixel_position[1] = Ro[1];
-    pixel_position[2] = Ro[2];
     
     // find position of pixel in space and get vector from it to the camera
     double obj_to_cam[3];
@@ -392,7 +379,6 @@ double* illuminate(double* Rd, double* Ro, Object* closest_object) {
     // look through light to find the ones that influence this pixel
     Light* current_light;
     Object* current_object;
-    double new_t = 0;
     for (int j=0; lights[j] != NULL; j++) {
         current_light = lights[j];
 
@@ -422,17 +408,7 @@ double* illuminate(double* Rd, double* Ro, Object* closest_object) {
             v3_add(offset, pixel_position, offset);
             // find new intersection between light and each object looking for one that is closer to the light 
             // and casts a shadow on the closest object to the camera at this pixel
-            switch (current_object->kind) {
-                case SPHERE:
-                    new_t = sphere_intersect(offset, obj_to_light, current_object->position, current_object->sphere.radius);
-                    break;
-                case PLANE:
-                    new_t = plane_intersect(offset, obj_to_light, current_object->position, current_object->plane.normal);
-                    break;
-                default:
-                    fprintf(stderr, "Error: Unknown object.\n");
-                    exit(1);
-            }
+            double new_t = shoot(obj_to_light, offset, current_object);
 
             // if there is a closer object to the light, then there is a shadow
             if (new_t > 0 && new_t <= dl) {
@@ -489,11 +465,8 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
     color[1] = 0;
     color[2] = 0;
     
-    if (level == MAX_RECURSION_DEPTH) {
+    if (level == MAX_RECURSION_DEPTH)
         return color;
-    }
-    
-    v3_add(color, illuminate(Rd, Ro, current_object), color);
     
     double* N = malloc(sizeof(double)*3);
     if (current_object->kind == SPHERE)
@@ -520,19 +493,8 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
             v3_scale(reflected_ray, 0.00001, offset);
             v3_add(offset, Ro, offset);
             
-            double t = 0;
-            switch (objects[i]->kind) {
-                case SPHERE:
-                    t = sphere_intersect(offset, reflected_ray, objects[i]->position, objects[i]->sphere.radius);
-                    break;
-                case PLANE:
-                    t = plane_intersect(offset, reflected_ray, objects[i]->position, objects[i]->plane.normal);
-                    break;
-                default:
-                    fprintf(stderr, "Error: Unknown object.\n");
-                    exit(1);
-            }
-
+            double t = shoot(reflected_ray, offset, objects[i]);
+            
             // save object if it intersects closer to the camera
             if (t > 0 && t < best_t) {
                 best_t = t;
@@ -560,18 +522,7 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
         v3_scale(refracted_ray, 0.00001, offset);
         v3_add(offset, Ro, offset);
         
-        double d;
-        switch (current_object->kind) {
-            case SPHERE:
-                d = sphere_intersect(offset, refracted_ray, current_object->position, current_object->sphere.radius);
-                break;
-            case PLANE:
-                d = plane_intersect(offset, refracted_ray, current_object->position, current_object->plane.normal);
-                break;
-            default:
-                fprintf(stderr, "Error: Unknown object.\n");
-                exit(1);
-        }
+        double d = shoot(refracted_ray, offset, current_object);
         
         double* back = malloc(sizeof(double)*3);
         v3_scale(refracted_ray, d, back);
@@ -600,18 +551,7 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
             v3_scale(refracted_ray, 0.00001, offset);
             v3_add(offset, Ro, offset);
             
-            double t = 0;
-            switch (objects[i]->kind) {
-                case SPHERE:
-                    t = sphere_intersect(offset, next_ray, objects[i]->position, objects[i]->sphere.radius);
-                    break;
-                case PLANE:
-                    t = plane_intersect(offset, next_ray, objects[i]->position, objects[i]->plane.normal);
-                    break;
-                default:
-                    fprintf(stderr, "Error: Unknown object.\n");
-                    exit(1);
-            }
+            double t = shoot(next_ray, offset, objects[i]);
 
             // save object if it intersects closer to the camera
             if (t > 0 && t < best_t) {
@@ -633,6 +573,7 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
         }
     }
     
+    v3_add(color, illuminate(Ro, current_object), color);
     return color;
 }
 
@@ -643,11 +584,6 @@ double* direct_shade(Object* current_object, double* pixel_position, double* lig
     color[2] = 0;
     
     double* N = malloc(sizeof(double)*3);
-    if (current_object->kind == SPHERE)
-        v3_subtract(pixel_position, current_object->position, N);
-    else
-        N = current_object->plane.normal;
-    normalize(N);
     
     // find vector from the object to the light
     double obj_to_light[3];
@@ -688,28 +624,45 @@ double* direct_shade(Object* current_object, double* pixel_position, double* lig
     return color;
 }
 
+double shoot(double* Rd, double* Ro, Object* object) {
+    double t = 0;
+    switch (object->kind) {
+        case SPHERE:
+            t = sphere_intersect(Ro, Rd, object->position, object->sphere.radius);
+            break;
+        case PLANE:
+            t = plane_intersect(Ro, Rd, object->position, object->plane.normal);
+            break;
+        default:
+            fprintf(stderr, "Error: Unknown object.\n");
+            exit(1);
+    }
+    return t;
+}
+
 double* refraction(double outer_ior, double inner_ior, double* ray_in, double* N) {
     double* ray_out = malloc(sizeof(double)*3);
     
-    double eta, c1, cs2; 
-    eta = outer_ior / inner_ior;
-    c1 = v3_dot(ray_in, N) * -1; // cos(theta)
-    cs2 = 1 - eta * eta * (1 - c1 * c1); // cos^2(phi)
+    double a;
+    double cos_theta;
+    double cos_phi;
+    a = outer_ior / inner_ior;
+    cos_theta = v3_dot(ray_in, N) * -1;
+    cos_phi = 1 - a * a * (1 - cos_theta * cos_theta);
 
-    if (cs2 < 0) { // total internal reflection
+    // total internal reflection
+    if (cos_phi < 0) {
       ray_out[0] = 0.0;
       ray_out[1] = 0.0;
       ray_out[2] = 0.0;
+      
       return ray_out;
     }
 
-    // Linear combination:
-    // transmittedRay = eta * incomingRay + (eta * c1 - sqrt(cs2)) * normal
     double* temp = malloc(3 * sizeof(double));
-    v3_scale(ray_in, eta, temp);
-    v3_scale(N, eta * c1 - sqrt(cs2), ray_out);
+    v3_scale(ray_in, a, temp);
+    v3_scale(N, a * cos_theta - sqrt(cos_phi), ray_out);
     v3_add(temp, ray_out, ray_out);
-
     normalize(ray_out);
 
     return ray_out;
