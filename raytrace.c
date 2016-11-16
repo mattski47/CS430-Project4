@@ -670,7 +670,7 @@ double* refraction(double outer_ior, double inner_ior, double* ray_in, double* N
         ray_out[1] = 0.0;
         ray_out[2] = 0.0;
       
-      return ray_out;
+        return ray_out;
     }
 
     double* temp = malloc(3 * sizeof(double));
