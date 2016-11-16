@@ -109,6 +109,7 @@ double* illuminate(double*, Object*);
 double* shade(Object*, double*, double*, int, double);
 double* direct_shade(Object*, double*, double*, double*, double*);
 double shoot(double*, double*, Object*);
+double* get_normal(Object*, double*);
 double* refraction(double, double, double*, double*);
 int compare_objects(Object*, Object*);
 double diffuse(double, double, double);
@@ -369,12 +370,7 @@ double* illuminate(double* pixel_position, Object* closest_object) {
     normalize(obj_to_cam);
 
     // find and save object normal
-    double* N = malloc(sizeof(double)*3);
-    if (closest_object->kind == SPHERE)
-        v3_subtract(pixel_position, closest_object->position, N);
-    else
-        N = closest_object->plane.normal;
-    normalize(N);
+    double* N = get_normal(closest_object, pixel_position);
 
     // look through light to find the ones that influence this pixel
     Light* current_light;
@@ -468,12 +464,7 @@ double* shade(Object* current_object, double* Rd, double* Ro, int level, double 
     if (level == MAX_RECURSION_DEPTH)
         return color;
     
-    double* N = malloc(sizeof(double)*3);
-    if (current_object->kind == SPHERE)
-        v3_subtract(Ro, current_object->position, N);
-    else
-        N = current_object->plane.normal;
-    normalize(N);
+    double* N = get_normal(current_object, Ro);
 
     if (current_object->reflectivity > 0) {
         double reflected_ray[3];
@@ -583,7 +574,7 @@ double* direct_shade(Object* current_object, double* pixel_position, double* lig
     color[1] = 0;
     color[2] = 0;
     
-    double* N = malloc(sizeof(double)*3);
+    double* N = get_normal(current_object, pixel_position);
     
     // find vector from the object to the light
     double obj_to_light[3];
@@ -638,6 +629,17 @@ double shoot(double* Rd, double* Ro, Object* object) {
             exit(1);
     }
     return t;
+}
+
+double* get_normal(Object* object, double* pixel_position) {
+    double* N = malloc(sizeof(double)*3);
+    
+    if (object->kind == SPHERE)
+        v3_subtract(pixel_position, object->position, N);
+    else
+        N = object->plane.normal;
+    normalize(N);
+    return N;
 }
 
 double* refraction(double outer_ior, double inner_ior, double* ray_in, double* N) {
