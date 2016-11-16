@@ -666,9 +666,9 @@ double* refraction(double outer_ior, double inner_ior, double* ray_in, double* N
 
     // total internal reflection
     if (cos_phi < 0) {
-      ray_out[0] = 0.0;
-      ray_out[1] = 0.0;
-      ray_out[2] = 0.0;
+        ray_out[0] = 0.0;
+        ray_out[1] = 0.0;
+        ray_out[2] = 0.0;
       
       return ray_out;
     }
